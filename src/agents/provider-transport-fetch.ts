@@ -1,3 +1,4 @@
+import fs from "node:fs";
 /**
  * Guarded provider fetch transport utilities.
  *
@@ -865,6 +866,9 @@ export function buildGuardedModelFetch(
         `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
         `policy=${policy ? "custom" : "default"}`,
     );
+
+    fs.writeFileSync("debug-input.json", guardedFetchOptions["init"]["body"]);
+
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
@@ -885,6 +889,36 @@ export function buildGuardedModelFetch(
       throw error;
     }
     let response = result.response;
+    response
+      .clone()
+      .text()
+      .then((body) => {
+        const lines = body.split(/\r?\n/);
+        const out = lines
+          .map((line) => {
+            if (!line.startsWith("data: ")) return null;
+            const json = line.slice(6);
+            try {
+              const parsed = JSON.parse(json) as {
+                choices?: Array<{ delta?: { content?: string; reasoning?: string } }>;
+              };
+              const delta = parsed?.choices?.[0]?.delta;
+              if (!delta) return null;
+              const parts: string[] = [];
+              if (delta.reasoning) parts.push(`reasoning: ${JSON.stringify(delta.reasoning)}`);
+              if (delta.content) parts.push(`content: ${JSON.stringify(delta.content)}`);
+              return parts.join("  ") || null;
+            } catch {
+              return line;
+            }
+          })
+          .filter(Boolean)
+          .join("\n");
+        fs.writeFileSync("debug-response.txt", out);
+      })
+      .catch((e) => {
+        fs.writeFileSync("debug-response.txt", `error reading body: ${e}`);
+      });
     emitModelTransportDebug(
       log,
       `[model-fetch] response provider=${model.provider} api=${model.api} model=${model.id} ` +
